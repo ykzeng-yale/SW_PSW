@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
 ## Title: SW_PSW
 
 ## Author
-**Your Name** (e.g., "Yukang Zeng, Fan Li, Guangyu Tong")
+**Yukang Zeng**
 
 ## Description
 This folder contains simulation code and examples for the paper:
