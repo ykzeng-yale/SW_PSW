@@ -1,141 +1,110 @@
-```rmd
 ---
-title: "SW_PSW README"
+title: "SW_PSW: README"
+author: "Your Name"
 output: github_document
 ---
 
-# SW_PSW
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+```
 
-**SW_PSW** is a collection of R scripts and functions to illustrate simulation-based analyses for **Propensity Score Weighting in Survey Observational Studies**, corresponding to the paper:
+## Title: SW_PSW
+
+## Author
+**Your Name** (e.g., "Yukang Zeng, Fan Li, Guangyu Tong")
+
+## Description
+This folder contains simulation code and examples for the paper:
 
 > **Moving toward best practice when using propensity score weighting in survey observational studies**  
 > by **Yukang Zeng, Fan Li, Guangyu Tong**.  
-> _arXiv:2501.16156 \[stat.ME\] (2025)_  
+> _arXiv:2501.16156 [stat.ME] (2025)_  
 > [arXiv link](https://arxiv.org/abs/2501.16156)
 
----
+The code demonstrates how to generate a super-population with good overlap, perform multi-stage sampling, and estimate treatment effects under different targets (ATE, ATT, ATO) using four methods:
 
-## Overview
+- **PSW (Propensity Score Weighting)**
+- **MOM (Moment-based Augmented Weighted Estimator)**
+- **CVR (Clever Covariate)**
+- **WET (Weighted Regression)**
 
-In this repository, we demonstrate how to:
-
-1. **Generate super-populations** that exhibit “good overlap” between treatment and control groups.
-2. **Implement multi-stage sampling** to obtain survey data from the super-population.
-3. **Estimate causal effects** under different target populations (ATE, ATT, ATO) using:
-   - **PSW** (Propensity Score Weighting),
-   - **MOM** (Moment-based Augmented Weighted Estimator),
-   - **CVR** (Clever Covariate Adjustment),
-   - **WET** (Weighted Regression).
-4. **Compute robust variance estimates** (sandwich variance) for each estimator.
-5. **Assess performance** via bias, variance, coverage in simulation studies.
-6. **Extract, summarize, and visualize** simulation results (e.g., relative bias, coverage, standardized mean differences).
+We also provide sandwich variance formulas and code to compute standardized mean differences (SMD).
 
 ---
 
-## Repository Files
-
-```
-.
-├─ EstSOD_Function.R
-├─ README.md
-├─ Results_Extraction.R
-├─ Sampling_MultiStage_and_Estimation.R
-├─ Shared_PSW_MOM_CVR_WET_Function.R
-├─ Super_Population_GoodOvelap.R
-└─ ...
-```
+## Files
 
 1. **Super_Population_GoodOvelap.R**  
-   - Generates a large super-population with defined covariates, logistic model for treatment assignment, and counterfactual outcomes.  
-   - Saves `SuperPopGen_GoodOverlap_AllinOne_0118_2025.RData`.
+   - Generates a large super-population with user-defined covariates, logistic PS model, counterfactual outcomes, and an example histogram.  
+   - Outputs `SuperPopGen_GoodOverlap_AllinOne_0118_2025.RData`.
 
 2. **Shared_PSW_MOM_CVR_WET_Function.R**  
-   - Contains unified functions for the four estimators (PSW, MOM, CVR, WET) and their sandwich variances:
+   - Defines **unified** functions for each estimator and their robust (sandwich) variance:
      - `PSW_Estimator`, `PSW_SandwichVariance`
      - `MOM_Estimator`, `MOM_SandwichVariance`
      - `CVR_Estimator`, `CVR_SandwichVariance`
      - `WET_Estimator`, `WET_SandwichVariance`
+   - Also includes `SMD_Calculator` for standardized mean differences.
 
 3. **EstSOD_Function.R**  
-   - High-level function **`EstSOD()`** that:
-     - Fits a logistic propensity model (`U`, `W`, `C`, `CW`).
-     - Constructs weights (`ate.wt`, `att.wt`, `ato.wt`) and tilting functions.
-     - Computes **PSW**, **MOM**, **CVR**, **WET** estimates for ATE/ATT/ATO.
-     - Computes sandwich variances, biases, standardized mean differences.
-     - Returns one named vector with all results.
+   - A high-level wrapper function named `EstSOD()` that:
+     1. Fits logistic PS (four modes: "U","W","C","CW").
+     2. Constructs survey-based weights for ATE, ATT, ATO.
+     3. Calls **PSW**, **MOM**, **CVR**, **WET** estimators.
+     4. Computes sandwich variances, biases, coverage, and SMD.
+     5. Returns a single, named result vector of all quantities.
 
 4. **Sampling_MultiStage_and_Estimation.R**  
-   - Illustrates how to perform **multi-stage sampling** from the super-population:
-     - Defines sample sizes (strata, clusters, individuals).
-     - Uses the `sampling` package (`mstage()`) to draw complex survey samples.
-     - Repeats sampling + calling `EstSOD()` in parallel (using `foreach` + `doParallel`).
-     - Aggregates the results, saves to `.RData`.
+   - Example multi-stage sampling:
+     1. Loads the super-population.
+     2. Performs multi-stage stratified+cluster sampling using the `sampling` package.
+     3. Repeats sampling + `EstSOD()` calls in parallel.
+     4. Stores results in `.RData` format.
 
 5. **Results_Extraction.R**  
-   - Shows how to load `.RData` results, compute and display summary metrics (bias, coverage, relative efficiency, etc.).
+   - Demonstrates how to read the saved `.RData`, extract or summarize results:
+     - Monte Carlo bias, variance, coverage, relative efficiency, etc.
+     - Example code for printing or tabulating with `xtable`.
 
 ---
 
 ## Usage
 
-1. **Set up environment**  
-   - Ensure R (≥ 4.0) is installed.
-   - Install needed packages:
+1. **Generate Super-Population**  
+   ```{r gen_pop}
+   source("Super_Population_GoodOvelap.R")
+   # Outputs SuperPopGen_GoodOverlap_AllinOne_0118_2025.RData
+   ```
 
-```r
-install.packages(c(
-  "survey", "MatchIt", "sampling", "doParallel", "foreach", 
-  "data.table", "numDeriv", "MASS", "Hmisc", "ggplot2"
-))
-```
+2. **Call Multi-Stage Sampling & Estimation**
+   ```{r sampling}
+   source("Sampling_MultiStage_and_Estimation.R")
+   # Repeatedly samples from super-pop, calls `EstSOD()`, saves results
+   ```
 
-2. **Generate super-population**  
-```r
-source("Super_Population_GoodOvelap.R")
-# This saves 'SuperPopGen_GoodOverlap_AllinOne_0118_2025.RData'
-```
+3. **Extract & Summarize**
+   ```{r extract}
+   source("Results_Extraction.R")
+   # Summarize bias, coverage, etc. from the stored results
+   ```
 
-3. **Run sampling & estimation**  
-```r
-source("Sampling_MultiStage_and_Estimation.R")
-# Defines scenario(s), runs replicate sampling, calls 'EstSOD()', saves .RData
-```
+## Example Simulation Scenarios
 
-4. **Analyze or extract results**  
-```r
-source("Results_Extraction.R")
-# Summarizes simulation outcomes: bias, coverage, relative efficiency, etc.
-```
+* **Scenario**: We control the number of strata (10) and clusters per stratum (20), then define sample sizes at each stage.
+* **Replicates**: We typically use `n.reps=5000` for stable results.
+* **Covariates**: 6 baseline covariates, plus an optional 7th for missingness scenarios.
+* **Treatment**: logistic model with moderate overlap.
+* **Outcome**: continuous outcome with a known super-population ATE, ATT, ATO.
 
----
+## Citation
 
-## Corresponding Paper
+If you use or adapt these scripts for your research, please cite:
 
-This repository supports analyses in the paper:
+**Moving toward best practice when using propensity score weighting in survey observational studies**
+Yukang Zeng, Fan Li, Guangyu Tong
+arXiv:2501.16156 [stat.ME], 2025.
+https://arxiv.org/abs/2501.16156
 
-> **Moving toward best practice when using propensity score weighting in survey observational studies**  
-> by **Yukang Zeng, Fan Li, Guangyu Tong**.  
-> _arXiv:2501.16156 \[stat.ME\] (2025)_  
-> [arXiv link](https://arxiv.org/abs/2501.16156)
+## Contact
 
-We provide:
-
-- Balancing-weights framework for complex surveys.  
-- M-estimator derivations & asymptotic properties.  
-- Extensive simulation studies.  
-- Empirical examples with real survey data.
-
----
-
-## Contributing / Contact
-
-- **Issues / Pull Requests** are welcome for suggestions, improvements, or questions.  
-- For additional details, please see the paper or contact the authors as listed there.
-
----
-
-## License
-
-MIT License or similar—see [LICENSE](https://opensource.org/licenses/MIT) (if provided).  
-Feel free to reuse and adapt for research and educational purposes.
-```
+For questions, bug reports, or requests, please open a GitHub Issue or contact the authors listed in the manuscript.
