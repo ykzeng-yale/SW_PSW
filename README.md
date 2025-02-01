@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
 ## Title: SW_PSW
 
 ## Author
-**Yukang Zeng**
+**Yukang Zeng, Fan Li and Guangyu Tong**
 
 ## Description
 This folder contains simulation code and examples for the paper:
