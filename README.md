@@ -1,13 +1,3 @@
----
-title: "SW_PSW: README"
-author: "Your Name"
-output: github_document
----
-
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
-```
-
 ## Title: SW_PSW
 
 ## Author
