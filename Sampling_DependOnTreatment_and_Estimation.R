@@ -36,15 +36,15 @@ for (scenario in 1:(n_scenarios * s.m)) {
   results[[scenario]]$att_sp <- att_sp
   results[[scenario]]$ato_sp <- ato_sp
   
-  ########################################################################################################################
-  # Define Multi-Stage Sampling Parameters
-  ########################################################################################################################
-  
-  size1 = rep(100000, 10)  # Population size per stratum
-  size2 = rep(5, 10)       # Number of clusters per stratum
-  size3 = c(rep(850 / 5, 5), rep(750 / 5, 5), rep(700 / 5, 5), rep(650 / 5, 5), 
-            rep(600 / 5, 5), rep(400 / 5, 5), rep(350 / 5, 5), rep(300 / 5, 5), 
-            rep(250 / 5, 5), rep(150 / 5, 5))  # Cluster-level sample sizes
+  # ########################################################################################################################
+  # # Define Multi-Stage Sampling Parameters
+  # ########################################################################################################################
+  # 
+  # size1 = rep(100000, 10)  # Population size per stratum
+  # size2 = rep(5, 10)       # Number of clusters per stratum
+  # size3 = c(rep(850 / 5, 5), rep(750 / 5, 5), rep(700 / 5, 5), rep(650 / 5, 5), 
+  #           rep(600 / 5, 5), rep(400 / 5, 5), rep(350 / 5, 5), rep(300 / 5, 5), 
+  #           rep(250 / 5, 5), rep(150 / 5, 5))  # Cluster-level sample sizes
   
   ########################################################################################################################
   # Parallel Sampling and Estimation
@@ -55,17 +55,38 @@ for (scenario in 1:(n_scenarios * s.m)) {
     print(paste(scenario, "-", i.rep))
     
     ####################################################################################################################
-    # Create the Sample
+    # Create the Sample 
     ####################################################################################################################
     
-    # Multistage sampling (stratified by strata, cluster, and individual levels)
-    s = mstage(data, stage = list("stratified", "cluster", ""), 
-               varnames = list("Strata", "Cluster", "ones"), 
-               size = list(size1, size2, size3), 
-               method = list("", "srswor", "srswor"))
+    # # Multistage sampling (stratified by strata, cluster, and individual levels)
+    # s = mstage(data, stage = list("stratified", "cluster", ""), 
+    #            varnames = list("Strata", "Cluster", "ones"), 
+    #            size = list(size1, size2, size3), 
+    #            method = list("", "srswor", "srswor"))
+    # 
+    # sample = getdata(data, s)[[3]]  # Extract the final sample
+    # save(sample, i.rep, file = paste(scenario, "-", i.rep, ".RData"))  # Save the sample
     
-    sample = getdata(data, s)[[3]]  # Extract the final sample
-    save(sample, i.rep, file = paste(scenario, "-", i.rep, ".RData"))  # Save the sample
+    # Coefficients for sample selection model
+    c0 = log(0.005 / (1 - 0.005)) 
+    c1 = log(1.05)  
+    c2 = log(1.10)  
+    c3 = log(1.15)  
+    c4 = log(1.10) 
+    c5 = log(1.05) 
+    c6 = log(1.10) 
+    delta_z_in_s = log(0.9) 
+    
+    formula_S = c0 + delta_z_in_s * data$z + c1 * data$x1 + c2 * data$x2 +
+      c3 * data$x3 + c4 * data$x4 + c5 * data$x5 + c6 * data$x6
+    
+    prob_S = expit(formula_S)
+    data$Prob = prob_S
+    data$S = rbinom(N, 1, prob_S)
+    sample = data[data$S == 1, ]
+
+    save(sample,i.rep, file = paste(scenario,"-",i.rep,".RData"))
+    
     
     ####################################################################################################################
     # Calculate Sample-Level Treatment Effects
@@ -90,7 +111,7 @@ for (scenario in 1:(n_scenarios * s.m)) {
     covariatesOM_MisInter = c("x1", "x2", "x3", "x4", "x5", "x6")          # Misspecified outcome model
     covariatesPS_MisInter = c("x1", "x2", "x3", "x4", "x5", "x6")          # Misspecified propensity score model
     covariatesSMD = c("x1", "x2", "x3", "x4", "x5", "x6")
-     
+    
     # Generate results for all combinations of model correctness
     
     # Cor|Cor
@@ -111,7 +132,7 @@ for (scenario in 1:(n_scenarios * s.m)) {
       EstSOD(sample, "s.wt", "z", "y", "CW", "W", covariatesPS_MisInter, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata")
       
     )
-
+    
     
     # Cor|Mis
     results_scenario_MisOMInter=c(
@@ -120,7 +141,7 @@ for (scenario in 1:(n_scenarios * s.m)) {
       EstSOD(sample, "s.wt", "z", "y", "C", "W", covariatesPS_Correct, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata"),
       EstSOD(sample, "s.wt", "z", "y", "CW", "W", covariatesPS_Correct, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata")
     )
-
+    
     
     # Mis|Mis
     results_scenario_MisBoth=c(
@@ -130,7 +151,7 @@ for (scenario in 1:(n_scenarios * s.m)) {
       EstSOD(sample, "s.wt", "z", "y", "CW", "W", covariatesPS_MisInter, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata")
       
     )
-
+    
     # Return results for the current replicate
     return(list(
       BothCorrect = results_scenario_BothCorrect,
