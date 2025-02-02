@@ -232,8 +232,8 @@ for(scenario in 1:n_scenarios){
 
 
 
-SuperPopGen_GoodOverlap_AllinOne_0118_2025<- data_sets
+SuperPopGen_PoorOverlap_AllinOne_0118_2025<- data_sets
 
-save(SuperPopGen_GoodOverlap_AllinOne_0118_2025, file = "SuperPopGen_GoodOverlap_AllinOne_0118_2025.RData")
+save(SuperPopGen_PoorOverlap_AllinOne_0118_2025, file = "SuperPopGen_PoorOverlap_AllinOne_0118_2025.RData")
 
 
