@@ -111,44 +111,45 @@ for (scenario in 1:(n_scenarios * s.m)) {
     covariatesOM_MisInter = c("x1", "x2", "x3", "x4", "x5", "x6")          # Misspecified outcome model
     covariatesPS_MisInter = c("x1", "x2", "x3", "x4", "x5", "x6")          # Misspecified propensity score model
     covariatesSMD = c("x1", "x2", "x3", "x4", "x5", "x6")
+    SW_Design = "Retrospective"
     
     # Generate results for all combinations of model correctness
     
     # Cor|Cor
     results_scenario_BothCorrect=c(
-      EstSOD(sample, "s.wt", "z", "y", "U", "W", covariatesPS_Correct, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "W", "W", covariatesPS_Correct, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "C", "W", covariatesPS_Correct, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "CW", "W", covariatesPS_Correct, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata")
+      EstSOD(sample, "s.wt", "z", "y", "U", SW_Design, covariatesPS_Correct, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "W", SW_Design, covariatesPS_Correct, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "C", SW_Design, covariatesPS_Correct, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "CW", SW_Design, covariatesPS_Correct, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata")
       
     )
     
     
     # Mis|Cor
     results_scenario_MisPSInter=c(
-      EstSOD(sample, "s.wt", "z", "y", "U", "W", covariatesPS_MisInter, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "W", "W", covariatesPS_MisInter, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "C", "W", covariatesPS_MisInter, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "CW", "W", covariatesPS_MisInter, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata")
+      EstSOD(sample, "s.wt", "z", "y", "U", SW_Design, covariatesPS_MisInter, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "W", SW_Design, covariatesPS_MisInter, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "C", SW_Design, covariatesPS_MisInter, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "CW", SW_Design, covariatesPS_MisInter, covariatesOM_Correct, covariatesSMD, min_prob, "Cluster", "Strata")
       
     )
     
     
     # Cor|Mis
     results_scenario_MisOMInter=c(
-      EstSOD(sample, "s.wt", "z", "y", "U", "W", covariatesPS_Correct, covariatesOM_MisInter , covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "W", "W", covariatesPS_Correct, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "C", "W", covariatesPS_Correct, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "CW", "W", covariatesPS_Correct, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata")
+      EstSOD(sample, "s.wt", "z", "y", "U", SW_Design, covariatesPS_Correct, covariatesOM_MisInter , covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "W", SW_Design, covariatesPS_Correct, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "C", SW_Design, covariatesPS_Correct, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "CW", SW_Design, covariatesPS_Correct, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata")
     )
     
     
     # Mis|Mis
     results_scenario_MisBoth=c(
-      EstSOD(sample, "s.wt", "z", "y", "U", "W", covariatesPS_MisInter, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "W", "W", covariatesPS_MisInter, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "C", "W", covariatesPS_MisInter, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata"),
-      EstSOD(sample, "s.wt", "z", "y", "CW", "W", covariatesPS_MisInter, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata")
+      EstSOD(sample, "s.wt", "z", "y", "U", SW_Design, covariatesPS_MisInter, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "W", SW_Design, covariatesPS_MisInter, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "C", SW_Design, covariatesPS_MisInter, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata"),
+      EstSOD(sample, "s.wt", "z", "y", "CW", SW_Design, covariatesPS_MisInter, covariatesOM_MisInter, covariatesSMD, min_prob, "Cluster", "Strata")
       
     )
     

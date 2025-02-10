@@ -47,114 +47,171 @@ PSW_Estimator <- function(data,
 
 PSW_SandwichVariance <- function(
     data, 
-    target       = c("ATE","ATT","ATO"), 
+    target       = c("ATE", "ATT", "ATO"), 
+    SW_Design    = c("Retrospective", "Independent", "Prospective"),
     mu1_hat,             # The estimated mu1 (from PSW_Estimator)
     mu0_hat,             # The estimated mu0 (from PSW_Estimator)
     est_psw,             # The PSW estimate = mu1_hat - mu0_hat
     true_value,          # e.g. ate_sp, att_sp, or ato_sp (for coverage)
     # Additional arguments needed for the sandwich variance:
-    beta_ps,             # the esp PS model coefs (weighted or unweighted)
-    beta_ps_fp,          # the efp PS model coefs
-    covM,                # model.matrix(...) for esp
-    covM_fp,             # model.matrix(...) for efp
-    weights_ps,          # e.g. data$s.wt or 1
-    min_prob = 0.00,            # min_prob to keep esp from 0 or 1
+    beta_ps,             # the esp PS model coefficients (used in Retrospective and Prospective [for ATT/ATO])
+    beta_ps_fp,          # the efp PS model coefficients (used in Independent and Prospective for ATE and ATT/ATO)
+    covM,                # model.matrix(...) for esp (n x p)
+    covM_fp,             # model.matrix(...) for efp (n x p_fp)
+    weights_ps,          # typically data$s.wt or 1
+    min_prob = 0.00,     # minimum probability to bound PS away from 0 or 1
     n                    # total sample size in data
 ) {
-
-  target <- match.arg(target)
+  target    <- match.arg(target)
+  SW_Design <- match.arg(SW_Design)
   
+  # Extract outcome and treatment variables
   y <- data$y
   z <- data$z
   
-  mu1 <- mu1_hat
-  mu0 <- mu0_hat
-  
-  W    <- covM
+  # Define design matrices (for esp and efp)
+  W    <- covM       # for esp (dimensions: n x p)
   p    <- ncol(W)
-  W_fp <- covM_fp
+  W_fp <- covM_fp    # for efp (dimensions: n x p_fp)
   p_fp <- ncol(W_fp)
   
-  phi <- function(theta) {
-    local_mu1  <- theta[1]
-    local_mu0  <- theta[2]
-    local_beta <- theta[3:(p+2)]
-    
-    esp <- plogis(drop(W %*% local_beta))
-    esp <- pmax(pmin(esp, 1 - min_prob), min_prob)
-    
-    efp <- plogis(drop(W_fp %*% beta_ps_fp))
-    efp <- pmax(pmin(efp, 1 - min_prob), min_prob)
-    
-    # Define the score components for the chosen estimand
-    if (target == "ATE") {
-      f1 <- (y - local_mu1) * z       * (1/esp)       * data$s.wt
-      f2 <- (y - local_mu0) * (1 - z) * (1/(1 - esp)) * data$s.wt
+  # Define the score function phi based on SW_Design:
+  if(SW_Design == "Retrospective") {
+    # In retrospective designs, treatment assignment is made before sampling.
+    # Parameter vector: theta = (mu1, mu0, beta_ps)
+    phi <- function(theta) {
+      local_mu1 <- theta[1]
+      local_mu0 <- theta[2]
+      local_beta <- theta[3:(2+p)]
+      # Compute esp inside phi (as function of local_beta)
+      esp_local <- plogis(drop(W %*% local_beta))
+      esp_local <- pmax(pmin(esp_local, 1 - min_prob), min_prob)
       
-    } else if (target == "ATT") {
-      f1 <- (y - local_mu1) * z       * 1             * data$s.wt
-      f2 <- (y - local_mu0) * (1 - z) * (esp/(1-esp)) * data$s.wt
-      
-    } else if (target == "ATO") {
-      f1 <- (y - local_mu1) * z       * (1 - esp) * data$s.wt
-      f2 <- (y - local_mu0) * (1 - z) * esp       * data$s.wt
-      
-    } else {
-      warning("PSW_SandwichVariance only supports 'ATE', 'ATT', or 'ATO'. Returning NA.")
-      # Return a zero matrix
-      out_dim <- p + 2
-      return(matrix(0, nrow=out_dim, ncol=nrow(data)))
+      if (target == "ATE") {
+        f1 <- (y - local_mu1) * z * (1/esp_local)       * data$s.wt
+        f2 <- (y - local_mu0) * (1 - z) * (1/(1 - esp_local)) * data$s.wt
+      } else if (target == "ATT") {
+        f1 <- (y - local_mu1) * z * 1                   * data$s.wt
+        f2 <- (y - local_mu0) * (1 - z) * (esp_local/(1 - esp_local)) * data$s.wt
+      } else if (target == "ATO") {
+        f1 <- (y - local_mu1) * z * (1 - esp_local)      * data$s.wt
+        f2 <- (y - local_mu0) * (1 - z) * esp_local        * data$s.wt
+      } else {
+        stop("Target must be one of 'ATE','ATT','ATO'.")
+      }
+      f3 <- weights_ps * W * (z - esp_local)
+      return(rbind(f1, f2, t(f3)))
     }
+    theta_hat <- c(mu1_hat, mu0_hat, beta_ps)
     
-    # f3: esp logistic PS score
-    f3 <- weights_ps * W * (z - esp)
+  } else if(SW_Design == "Independent") {
+    # In independent prospective designs, sampling is independent of treatment.
+    # Here esp = efp so we use the sample-level PS.
+    # Parameter vector: theta = (mu1, mu0, beta_ps_fp)
+    phi <- function(theta) {
+      local_mu1 <- theta[1]
+      local_mu0 <- theta[2]
+      local_beta_fp <- theta[3:(2+p_fp)]
+      efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+      efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+      
+      if (target == "ATE") {
+        f1 <- (y - local_mu1) * z * (1/efp_local)       * data$s.wt
+        f2 <- (y - local_mu0) * (1 - z) * (1/(1 - efp_local)) * data$s.wt
+      } else if (target == "ATT") {
+        f1 <- (y - local_mu1) * z * 1                   * data$s.wt
+        f2 <- (y - local_mu0) * (1 - z) * (efp_local/(1 - efp_local)) * data$s.wt
+      } else if (target == "ATO") {
+        f1 <- (y - local_mu1) * z * (1 - efp_local)      * data$s.wt
+        f2 <- (y - local_mu0) * (1 - z) * efp_local        * data$s.wt
+      }
+      f3 <- W_fp * (z - efp_local)
+      return(rbind(f1, f2, t(f3)))
+    }
+    theta_hat <- c(mu1_hat, mu0_hat, beta_ps_fp)
     
-    rbind(f1, f2, t(f3))
+  } else if(SW_Design == "Prospective") {
+    # In the prospective design where treatment depends on sampling, the PS model is twofold.
+    # For target ATE, we use only the sample-level PS (efp).
+    # For target ATT or ATO, we incorporate both esp and efp.
+    if (target == "ATE") {
+      phi <- function(theta) {
+        local_mu1 <- theta[1]
+        local_mu0 <- theta[2]
+        local_beta_fp <- theta[3:(2+p_fp)]
+        efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+        efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+        
+        f1 <- (y - local_mu1) * z * (1/efp_local)       * data$s.wt
+        f2 <- (y - local_mu0) * (1 - z) * (1/(1 - efp_local)) * data$s.wt
+        f3 <- W_fp * (z - efp_local)
+        return(rbind(f1, f2, t(f3)))
+      }
+      theta_hat <- c(mu1_hat, mu0_hat, beta_ps_fp)
+    } else if (target %in% c("ATT", "ATO")) {
+      phi <- function(theta) {
+        local_mu1 <- theta[1]
+        local_mu0 <- theta[2]
+        local_beta <- theta[3:(2+p)]         # For esp (population-level)
+        local_beta_fp <- theta[(3+p):(2+p+p_fp)]  # For efp (sample-level)
+        esp_local <- plogis(drop(W %*% local_beta))
+        esp_local <- pmax(pmin(esp_local, 1 - min_prob), min_prob)
+        efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+        efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+        
+        if (target == "ATT") {
+          f1 <- (y - local_mu1) * z * (esp_local/efp_local)       * data$s.wt
+          f2 <- (y - local_mu0) * (1 - z) * (esp_local/(1 - efp_local)) * data$s.wt
+        } else if (target == "ATO") {
+          f1 <- (y - local_mu1) * z * esp_local*(1-esp_local)/efp_local        * data$s.wt
+          f2 <- (y - local_mu0) * (1 - z) * esp_local*(1-esp_local)/(1-efp_local)         * data$s.wt
+        }
+        # For prospective ATT/ATO we include two PS score components:
+        f3_esp <- weights_ps * W * (z - esp_local)
+        f3_efp <- W_fp * (z - efp_local)
+        return(rbind(f1, f2, t(f3_esp), t(f3_efp)))
+      }
+      theta_hat <- c(mu1_hat, mu0_hat, beta_ps, beta_ps_fp)
+    } else {
+      stop("target not recognized in Prospective design.")
+    }
+  } else {
+    stop("SW_Design must be 'Retrospective', 'Independent', or 'Prospective'.")
   }
   
-  mphi <- function(theta) {
-    rowMeans( phi(theta) )
-  }
+  mphi <- function(theta) rowMeans(phi(theta))
   
-  # Vector of parameters: (mu1, mu0, beta_ps)
-  theta_hat <- c(mu1_hat, mu0_hat, beta_ps)
-  
-  # Derivative wrt all parameters
+  # Compute Jacobian and its inverse
   Atheta <- numDeriv::jacobian(mphi, theta_hat)
   invAtheta <- tryCatch(
     solve(Atheta),
     error = function(e) {
-      message("Matrix is singular, using pseudo-inverse via MASS::ginv")
+      message("Matrix is singular; using pseudo-inverse via MASS::ginv")
       MASS::ginv(Atheta)
     }
   )
   
-  # Meat operator => crossprod of phi
-  phis_hat <- phi(theta_hat)            
-  B_mat    <- tcrossprod(phis_hat) / n  
-  
-  # Final sandwich variance
+  phis_hat <- phi(theta_hat)
+  B_mat <- tcrossprod(phis_hat) / n
   Var_mat <- invAtheta %*% B_mat %*% t(invAtheta) / n
   
-  a <- matrix(0, nrow=2, ncol=length(theta_hat))
-  a[1,1] <- 1
-  a[2,2] <- 1
+  # We want the variance of (mu1 - mu0); extract the first two elements.
+  a <- matrix(0, nrow = 2, ncol = length(theta_hat))
+  a[1, 1] <- 1
+  a[2, 2] <- 1
   covmu <- a %*% Var_mat %*% t(a)
-  
-  contrast <- matrix(c(1, -1), nrow=1)
-  var_psw  <- drop(contrast %*% covmu %*% t(contrast))
-  sd_psw   <- sqrt(var_psw)
+  contrast <- matrix(c(1, -1), nrow = 1)
+  var_psw <- drop(contrast %*% covmu %*% t(contrast))
+  sd_psw <- sqrt(var_psw)
   
   coverage_psw <- as.numeric(
-    (est_psw - 1.96*sd_psw < true_value) &&
-      (est_psw + 1.96*sd_psw > true_value)
+    (est_psw - 1.96 * sd_psw < true_value) &&
+      (est_psw + 1.96 * sd_psw > true_value)
   )
   
-  list(
-    var_psw       = var_psw,
-    sd_psw        = sd_psw,
-    coverage_psw  = coverage_psw
-  )
+  list(var_psw = var_psw,
+       sd_psw = sd_psw,
+       coverage_psw = coverage_psw)
 }
 
 
@@ -444,154 +501,229 @@ WET_Estimator <- function(
 MOM_SandwichVariance <- function(
     data,
     target        = c("ATE", "ATT", "ATO"),
-    
-    # The PSW-based mu1, mu0 estimates => e.g. mu1_pate, mu0_pate
-    mu1_hat,            
-    mu0_hat,            
-    
-    # The final MOM difference
-    est_mom,            
-    
-    # For coverage calculation
-    true_value,         # e.g. ate_sp, att_sp, or ato_sp
-    
-    # The fitted outcome models
-    fit_1_mom,          # e.g. the svyglm fit for z=1
-    fit_0_mom,          # e.g. the svyglm fit for z=0
-    
-    # PS arguments
-    beta_ps,            
-    beta_ps_fp,         
-    covM,               
-    covM_fp,            
-    weights_ps,         
-    min_prob   = 0.00,  
+    SW_Design     = c("Retrospective", "Independent", "Prospective"),
+    mu1_hat,             # MOM-based mu1 estimate (from MOM_Estimator)
+    mu0_hat,             # MOM-based mu0 estimate (from MOM_Estimator)
+    est_mom,             # MOM treatment effect (mu1_hat - mu0_hat)
+    true_value,          # True treatment effect (for coverage)
+    fit_1_mom,           # Outcome model fit for z = 1 (svyglm)
+    fit_0_mom,           # Outcome model fit for z = 0 (svyglm)
+    beta_ps,             # PS coefficients for esp (population-level)
+    beta_ps_fp,          # PS coefficients for efp (sample-level)
+    covM,                # model.matrix for esp (n x p)
+    covM_fp,             # model.matrix for efp (n x p_fp)
+    weights_ps,          # typically data$s.wt (used in the esp score components)
+    min_prob   = 0.00,   # lower bound to avoid PS=0 or 1
     n          = nrow(data)
 ) {
-
-  target <- match.arg(target)
+  target    <- match.arg(target)
+  SW_Design <- match.arg(SW_Design)
   
   y <- data$y
   z <- data$z
-
-  # Extract outcome-model coefs (gamma1, gamma0)
+  
+  # Extract outcome-model coefficients (from the fitted outcome regressions)
   gamma1.h <- as.numeric(coef(fit_1_mom))
   gamma0.h <- as.numeric(coef(fit_0_mom))
   
-  # Build the same design matrix used in fit_1_mom and fit_0_mom
+  # Outcome design matrix (must match the model used in fit_1_mom)
   XY <- model.matrix(stats::formula(fit_1_mom), data = data)
   
-  # Dimensions
-  W    <- covM
+  # PS design matrices and dimensions:
+  W    <- covM        # for esp (population-level PS)
   p    <- ncol(W)
-  W_fp <- covM_fp
+  W_fp <- covM_fp     # for efp (sample-level PS)
   p_fp <- ncol(W_fp)
-  q    <- ncol(XY)    
+  q    <- ncol(XY)
   
-  # Re-extract the predicted potential outcomes from data
+  # Predicted potential outcomes (already computed in EstSOD)
   m1.h <- data$pred_1_mom
   m0.h <- data$pred_0_mom
   
-  # Compute the "aug1h.h" and "aug1z.h" as well as "aug0h.h" and "aug0z.h"
+  # Compute the MOM tilting quantities from the data (set in EstSOD)
   if (target == "ATE") {
-    aug1h.h <- sum(data$h_ate * m1.h) / sum(data$h_ate)
-    aug1z.h <- sum(z * m1.h * data$ate.wt) / sum(z * data$ate.wt)
-    
-    aug0h.h <- sum(data$h_ate * m0.h) / sum(data$h_ate)
-    aug0z.h <- sum((1 - z) * m0.h * data$ate.wt) / sum((1 - z) * data$ate.wt)
-    
+    mom1h.h <- sum(data$h_ate * m1.h) / sum(data$h_ate)
+    mom1z.h <- sum(z * m1.h * data$ate.wt) / sum(z * data$ate.wt)
+    mom0h.h <- sum(data$h_ate * m0.h) / sum(data$h_ate)
+    mom0z.h <- sum((1 - z) * m0.h * data$ate.wt) / sum((1 - z) * data$ate.wt)
   } else if (target == "ATT") {
-    aug1h.h <- sum(data$h_att * m1.h) / sum(data$h_att)
-    aug1z.h <- sum(z * m1.h * data$att.wt) / sum(z * data$att.wt)
-    
-    aug0h.h <- sum(data$h_att * m0.h) / sum(data$h_att)
-    aug0z.h <- sum((1 - z) * m0.h * data$att.wt) / sum((1 - z) * data$att.wt)
-    
+    mom1h.h <- sum(data$h_att * m1.h) / sum(data$h_att)
+    mom1z.h <- sum(z * m1.h * data$att.wt) / sum(z * data$att.wt)
+    mom0h.h <- sum(data$h_att * m0.h) / sum(data$h_att)
+    mom0z.h <- sum((1 - z) * m0.h * data$att.wt) / sum((1 - z) * data$att.wt)
   } else if (target == "ATO") {
-    aug1h.h <- sum(data$h_ato * m1.h) / sum(data$h_ato)
-    aug1z.h <- sum(z * m1.h * data$ato.wt) / sum(z * data$ato.wt)
-    
-    aug0h.h <- sum(data$h_ato * m0.h) / sum(data$h_ato)
-    aug0z.h <- sum((1 - z) * m0.h * data$ato.wt) / sum((1 - z) * data$ato.wt)
-    
+    mom1h.h <- sum(data$h_ato * m1.h) / sum(data$h_ato)
+    mom1z.h <- sum(z * m1.h * data$ato.wt) / sum(z * data$ato.wt)
+    mom0h.h <- sum(data$h_ato * m0.h) / sum(data$h_ato)
+    mom0z.h <- sum((1 - z) * m0.h * data$ato.wt) / sum((1 - z) * data$ato.wt)
   } else {
-    warning("MOM_SandwichVariance only supports ATE, ATT, ATO. Returning NA.")
-    return(list(var_mom=NA, sd_mom=NA, coverage_mom=NA))
+    warning("MOM_SandwichVariance only supports ATE, ATT, or ATO.")
+    return(list(var_mom = NA, sd_mom = NA, coverage_mom = NA))
   }
   
-  # Define v1, v2, v3
-  v1 <- aug1h.h - aug0h.h
-  v2 <- mu1_hat - aug1z.h
-  v3 <- mu0_hat - aug0z.h
+  # Define the three components that form the augmented MOM estimator:
+  v1 <- mom1h.h - mom0h.h
+  v2 <- mu1_hat - mom1z.h
+  v3 <- mu0_hat - mom0z.h
   
-  # Define phi(...) for the augmented approach
-  phi <- function(theta) {
-    loc_v1      <- theta[1]
-    loc_v2      <- theta[2]
-    loc_v3      <- theta[3]
-    loc_beta    <- theta[4:(3 + p)]
-    loc_beta_fp <- theta[(4 + p):(3 + p + p_fp)]
-    loc_gamma1  <- theta[(4 + p + p_fp):(3 + p + p_fp + q)]
-    loc_gamma0  <- theta[(4 + p + p_fp + q):(3 + p + p_fp + 2*q)]
-    
-    esp <- plogis(drop(W    %*% loc_beta))
-    esp <- pmax(pmin(esp, 1 - min_prob), min_prob)
-    
-    efp <- plogis(drop(W_fp %*% loc_beta_fp))
-    efp <- pmax(pmin(efp, 1 - min_prob), min_prob)
-    
-    r_z <- ifelse(z == 1, esp/efp, (1 - esp)/(1 - efp))
-    
-    m1_local <- drop(XY %*% loc_gamma1)
-    m0_local <- drop(XY %*% loc_gamma0)
-    
-    # f1, f2, f3 differ by target
-    if (target == "ATE") {
-      f1 <- data$s.wt*(1/r_z)*(m1_local - m0_local - loc_v1)
-      f2 <- z * (1/esp)*data$s.wt * (y - m1_local - loc_v2)
-      f3 <- (1 - z)*(1/(1-esp))*data$s.wt * (y - m0_local - loc_v3)
-    } else if (target == "ATT") {
-      f1 <- esp*data$s.wt*(1/r_z)*(m1_local - m0_local - loc_v1)
-      f2 <- z * 1 * data$s.wt * (y - m1_local - loc_v2)
-      f3 <- (1 - z)*(esp/(1-esp))*data$s.wt*(y - m0_local - loc_v3)
-    } else { # "ATO"
-      f1 <- esp*(1-esp)*data$s.wt*(1/r_z)*(m1_local - m0_local - loc_v1)
-      f2 <- z*(1-esp)*data$s.wt*(y - m1_local - loc_v2)
-      f3 <- (1 - z)*esp*data$s.wt*(y - m0_local - loc_v3)
+  ## Branch the score function phi based on SW_Design:
+  if (SW_Design == "Retrospective") {
+    # Retrospective: use both esp and efp.
+    # Parameter vector: theta = (v1, v2, v3, beta_ps, beta_ps_fp, gamma1, gamma0)
+    phi <- function(theta) {
+      loc_v1      <- theta[1]
+      loc_v2      <- theta[2]
+      loc_v3      <- theta[3]
+      local_beta  <- theta[4:(3 + p)]
+      local_beta_fp <- theta[(4 + p):(3 + p + p_fp)]
+      loc_gamma1  <- theta[(4 + p + p_fp):(3 + p + p_fp + q)]
+      loc_gamma0  <- theta[(4 + p + p_fp + q):(3 + p + p_fp + 2*q)]
+      
+      esp_local <- plogis(drop(W %*% local_beta))
+      esp_local <- pmax(pmin(esp_local, 1 - min_prob), min_prob)
+      
+      efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+      efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+      
+      r_z <- ifelse(z == 1, esp_local/efp_local, (1 - esp_local)/(1 - efp_local))
+      
+      m1_local <- drop(XY %*% loc_gamma1)
+      m0_local <- drop(XY %*% loc_gamma0)
+      
+      if (target == "ATE") {
+        f1 <- data$s.wt * (1/r_z) * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1/esp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (1/(1 - esp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else if (target == "ATT") {
+        f1 <- esp_local * data$s.wt * (1/r_z) * (m1_local - m0_local - loc_v1)
+        f2 <- z * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (esp_local/(1 - esp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else {  # ATO
+        f1 <- esp_local*(1-esp_local) * data$s.wt * (1/r_z) * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1-esp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * esp_local * data$s.wt * (y - m0_local - loc_v3)
+      }
+      
+      f7 <- weights_ps * W * (z - esp_local)
+      f8 <- W_fp * (z - efp_local)
+      f9 <- XY * ((y - m1_local) * z)
+      f10 <- XY * ((y - m0_local) * (1 - z))
+ 
+      return(rbind(f1, f2, f3, t(f7), t(f8), t(f9), t(f10)))
     }
+    theta_hat <- c(v1, v2, v3, beta_ps, beta_ps_fp, gamma1.h, gamma0.h)
     
-    # f7, f8 => outcome-model score wrt gamma1, gamma0
-    f7 <- XY * ((y - m1_local) * z)
-    f8 <- XY * ((y - m0_local) * (1 - z))
+  } else if (SW_Design == "Independent") {
+    # Independent: use only sample-level PS.
+    # Parameter vector: theta = (v1, v2, v3, beta_ps_fp, gamma1, gamma0)
+    phi <- function(theta) {
+      loc_v1       <- theta[1]
+      loc_v2       <- theta[2]
+      loc_v3       <- theta[3]
+      local_beta_fp <- theta[4:(3 + p_fp)]
+      efp_local    <- plogis(drop(W_fp %*% local_beta_fp))
+      efp_local    <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+      
+      m1_local <- drop(XY %*% gamma1.h)
+      m0_local <- drop(XY %*% gamma0.h)
+      
+      
+      if (target == "ATE") {
+        f1 <- data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1/efp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (1/(1 - efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else if (target == "ATT") {
+        f1 <- efp_local * data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (efp_local/(1 - efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else {  # ATO
+        f1 <- efp_local*(1-efp_local) * data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1-efp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * efp_local * data$s.wt * (y - m0_local - loc_v3)
+      }
+      
+      f8 <- W_fp * (z - efp_local)
+      f9 <- XY * ((y - m1_local) * z)
+      f10 <- XY * ((y - m0_local) * (1 - z))
+      
+      
+      return(rbind(f1, f2, f3, t(f8), t(f9), t(f10)))
+    }
+    theta_hat <- c(v1, v2, v3, beta_ps_fp, gamma1.h, gamma0.h)
     
-    # f9, f10 => logistic PS components
-    f9  <- weights_ps * W    * (z - esp)
-    f10 <-               W_fp * (z - efp)
-    
-    rbind(
-      f1,
-      f2,
-      f3,
-      t(f7),
-      t(f8),
-      t(f9),
-      t(f10)
-    )
+  } else if (SW_Design == "Prospective") {
+    # Prospective design:
+    # For target ATE: use only sample-level PS (as in Independent)
+    # For target ATT/ATO: use both esp and efp.
+    if (target == "ATE") {
+      phi <- function(theta) {
+        loc_v1 <- theta[1]
+        loc_v2 <- theta[2]
+        loc_v3 <- theta[3]
+        local_beta_fp <- theta[4:(3 + p_fp)]
+        efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+        efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+        
+        m1_local <- drop(XY %*% gamma1.h)
+        m0_local <- drop(XY %*% gamma0.h)
+        
+        f1 <- data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1/efp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (1/(1 - efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+        
+        f8 <- W_fp * (z - efp_local)
+        f9 <- XY * ((y - m1_local) * z)
+        f10 <- XY * ((y - m0_local) * (1 - z))
+        
+        
+        return(rbind(f1, f2, f3, t(f8), t(f9), t(f10)))
+      }
+      theta_hat <- c(v1, v2, v3, beta_ps_fp, gamma1.h, gamma0.h)
+    } else if (target %in% c("ATT", "ATO")) {
+      phi <- function(theta) {
+        loc_v1 <- theta[1]
+        loc_v2 <- theta[2]
+        loc_v3 <- theta[3]
+        local_beta    <- theta[4:(3 + p)]         # for esp (population-level)
+        local_beta_fp <- theta[(4 + p):(3 + p + p_fp)]  # for efp (sample-level)
+        esp_local <- plogis(drop(W %*% local_beta))
+        esp_local <- pmax(pmin(esp_local, 1 - min_prob), min_prob)
+        efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+        efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+        
+        m1_local <- drop(XY %*% gamma1.h)
+        m0_local <- drop(XY %*% gamma0.h)
+        
+        r_z <- ifelse(z == 1, esp_local/efp_local, (1 - esp_local)/(1 - efp_local))
+        
+        if (target == "ATT") {
+          f1 <- esp_local * data$s.wt * (m1_local - m0_local - loc_v1)
+          f2 <- z * (esp_local/efp_local) *data$s.wt * (y - m1_local - loc_v2)
+          f3 <- (1 - z) * (esp_local/(1 - efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+        } else {  # ATO
+          f1 <- esp_local*(1-esp_local) * data$s.wt * (m1_local - m0_local - loc_v1)
+          f2 <- z * esp_local*(1-esp_local)/efp_local * data$s.wt * (y - m1_local - loc_v2)
+          f3 <- (1 - z) * esp_local*(1-esp_local)/(1-efp_local) * data$s.wt * (y - m0_local - loc_v3)
+        }
+        
+        f7 <- weights_ps * W * (z - esp_local)
+        f8 <- W_fp * (z - efp_local)
+        f9 <- XY * ((y - m1_local) * z)
+        f10 <- XY * ((y - m0_local) * (1 - z))
+        
+        
+        return(rbind(f1, f2, f3, t(f7), t(f8), t(f9), t(f10)))
+      }
+      theta_hat <- c(v1, v2, v3, beta_ps, beta_ps_fp, gamma1.h, gamma0.h)
+    } else {
+      stop("target not recognized in Prospective design.")
+    }
+  } else {
+    stop("SW_Design must be 'Retrospective', 'Independent', or 'Prospective'.")
   }
   
-  # Helper: rowMeans of phi
+  # Compute the empirical Jacobian and the sandwich variance:
   mphi <- function(theta) rowMeans(phi(theta))
-  
-  #  param vector = (v1, v2, v3, beta_ps, beta_ps_fp, gamma1, gamma0)
-  theta_hat <- c(
-    v1, v2, v3,
-    beta_ps,
-    beta_ps_fp,
-    gamma1.h,
-    gamma0.h
-  )
-
-  # Derivative (Jacobian) and Meat (crossprod of phi)
   Atheta <- numDeriv::jacobian(mphi, theta_hat)
   invAtheta <- tryCatch(
     solve(Atheta),
@@ -600,36 +732,41 @@ MOM_SandwichVariance <- function(
       MASS::ginv(Atheta)
     }
   )
-  
-  phis_hat <- phi(theta_hat)           
-  B_mat    <- tcrossprod(phis_hat) / n  
-  
+  phis_hat <- phi(theta_hat)
+  B_mat <- tcrossprod(phis_hat) / n
   Var_mat <- invAtheta %*% B_mat %*% t(invAtheta) / n
   
   dims_total <- length(theta_hat)
-  a <- matrix(0, nrow=3, ncol=dims_total)
-  a[1,1] <- 1  # picks out v1
-  a[2,2] <- 1  # picks out v2
-  a[3,3] <- 1  # picks out v3
-  
-  cov_v123 <- a %*% Var_mat %*% t(a)  # 3x3
-  
-  # (v1 + v2 - v3)
-  contrast <- matrix(c(1,1,-1), nrow=1) 
-  var_mom  <- drop(contrast %*% cov_v123 %*% t(contrast))
-  sd_mom   <- sqrt(var_mom)
-  
+  a <- matrix(0, nrow = 3, ncol = dims_total)
+  a[1, 1] <- 1
+  a[2, 2] <- 1
+  a[3, 3] <- 1
+  cov_v123 <- a %*% Var_mat %*% t(a)
+  contrast <- matrix(c(1, 1, -1), nrow = 1)
+  var_mom <- drop(contrast %*% cov_v123 %*% t(contrast))
+  sd_mom <- sqrt(var_mom)
   coverage_mom <- as.numeric(
-    (est_mom - 1.96*sd_mom < true_value) &&
-      (est_mom + 1.96*sd_mom > true_value)
+    (est_mom - 1.96 * sd_mom < true_value) &&
+      (est_mom + 1.96 * sd_mom > true_value)
   )
   
   list(
-    var_mom       = var_mom,
-    sd_mom        = sd_mom,
-    coverage_mom  = coverage_mom
+    var_mom = var_mom,
+    sd_mom = sd_mom,
+    coverage_mom = coverage_mom
   )
 }
+
+
+
+
+
+
+
+
+
+
+
 
 
 ##############################################################################
@@ -638,150 +775,221 @@ MOM_SandwichVariance <- function(
 
 CVR_SandwichVariance <- function(
     data,
-    target = c("ATE","ATT","ATO"),
-    
-    # The PSW-based mu1, mu0 estimates => e.g. mu1_pate, mu0_pate
-    mu1_hat,
-    mu0_hat,
-    
-    # The final CVR difference
-    est_cvr,
-    
-    # Optional: True value for coverage
-    true_value,       # e.g. ate_sp, att_sp, or ato_sp
-    
-    # Fitted outcome models for "clever" approach
-    fit_1_cvr,
-    fit_0_cvr,
-    
-    # PS arguments
-    beta_ps,
-    beta_ps_fp,
-    covM,
-    covM_fp,
-    weights_ps,
-    
-    min_prob = 0.00,
-    n        = nrow(data)
+    target        = c("ATE", "ATT", "ATO"),
+    SW_Design     = c("Retrospective", "Independent", "Prospective"),
+    mu1_hat,             # CVR-based mu1 estimate (from CVR_Estimator)
+    mu0_hat,             # CVR-based mu0 estimate (from CVR_Estimator)
+    est_cvr,             # CVR treatment effect (mu1_hat - mu0_hat)
+    true_value,          # True treatment effect (for coverage)
+    fit_1_cvr,           # Outcome model fit for z = 1 (svyglm)
+    fit_0_cvr,           # Outcome model fit for z = 0 (svyglm)
+    beta_ps,             # PS coefficients for esp (population-level)
+    beta_ps_fp,          # PS coefficients for efp (sample-level)
+    covM,                # model.matrix for esp (n x p)
+    covM_fp,             # model.matrix for efp (n x p_fp)
+    weights_ps,          # typically data$s.wt (used in esp score components)
+    min_prob   = 0.00,   # lower bound to avoid PS=0 or 1
+    n          = nrow(data)
 ) {
-
-  target <- match.arg(target)
-
+  target    <- match.arg(target)
+  SW_Design <- match.arg(SW_Design)
+  
   y <- data$y
   z <- data$z
   
-  # 2) Extract the outcome-model coefs from fit_1_cvr, fit_0_cvr
+  # Extract outcome-model coefficients from the clever estimator fits
   gamma1.h <- as.numeric(coef(fit_1_cvr))
   gamma0.h <- as.numeric(coef(fit_0_cvr))
   
-  # Build the design matrix XY that matches fit_1_cvr
-  XY <- model.matrix(stats::formula(fit_1_cvr), data=data)
-
-  W    <- covM
+  # Construct the outcome design matrix (as used in fit_1_cvr)
+  XY <- model.matrix(stats::formula(fit_1_cvr), data = data)
+  
+  # PS design matrices and their dimensions
+  W    <- covM        # for esp (population-level PS)
   p    <- ncol(W)
-  W_fp <- covM_fp
+  W_fp <- covM_fp     # for efp (sample-level PS)
   p_fp <- ncol(W_fp)
   q    <- ncol(XY)
   
-  # Re-extract the predicted potential outcomes
-  m1.h <- data$pred_1_cvr  
+  # Extract the predicted potential outcomes from the clever estimator
+  m1.h <- data$pred_1_cvr
   m0.h <- data$pred_0_cvr
   
-  # 4) Compute the "augmentation" pieces => v1, v2, v3
+  # Compute the tilting quantities from the data (set in EstSOD)
   if (target == "ATE") {
     clever1h.h <- sum(data$h_ate * m1.h) / sum(data$h_ate)
     clever1z.h <- sum(z * m1.h * data$ate.wt) / sum(z * data$ate.wt)
     clever0h.h <- sum(data$h_ate * m0.h) / sum(data$h_ate)
     clever0z.h <- sum((1 - z) * m0.h * data$ate.wt) / sum((1 - z) * data$ate.wt)
-    
   } else if (target == "ATT") {
     clever1h.h <- sum(data$h_att * m1.h) / sum(data$h_att)
     clever1z.h <- sum(z * m1.h * data$att.wt) / sum(z * data$att.wt)
     clever0h.h <- sum(data$h_att * m0.h) / sum(data$h_att)
     clever0z.h <- sum((1 - z) * m0.h * data$att.wt) / sum((1 - z) * data$att.wt)
-    
   } else if (target == "ATO") {
     clever1h.h <- sum(data$h_ato * m1.h) / sum(data$h_ato)
     clever1z.h <- sum(z * m1.h * data$ato.wt) / sum(z * data$ato.wt)
     clever0h.h <- sum(data$h_ato * m0.h) / sum(data$h_ato)
     clever0z.h <- sum((1 - z) * m0.h * data$ato.wt) / sum((1 - z) * data$ato.wt)
-    
   } else {
-    warning("CVR_SandwichVariance only supports ATE, ATT, ATO. Returning NA.")
-    return(list(var_cvr=NA, sd_cvr=NA, coverage_cvr=NA))
+    warning("CVR_SandwichVariance only supports ATE, ATT, or ATO. Returning NA.")
+    return(list(var_cvr = NA, sd_cvr = NA, coverage_cvr = NA))
   }
   
-  v1 <- (clever1h.h - clever0h.h)
-  v2 <- (mu1_hat - clever1z.h)
-  v3 <- (mu0_hat - clever0z.h)
+  # Define the three components of the clever estimator
+  v1 <- clever1h.h - clever0h.h
+  v2 <- mu1_hat - clever1z.h
+  v3 <- mu0_hat - clever0z.h
   
-  # 5) Build phi(...) function
-  phi <- function(theta) {
-    loc_v1      <- theta[1]
-    loc_v2      <- theta[2]
-    loc_v3      <- theta[3]
-    loc_beta    <- theta[4:(3 + p)]
-    loc_beta_fp <- theta[(4 + p):(3 + p + p_fp)]
-    loc_gamma1  <- theta[(4 + p + p_fp)           : (3 + p + p_fp +    q)]
-    loc_gamma0  <- theta[(4 + p + p_fp +    q)    : (3 + p + p_fp + 2*q)]
-    
-    esp <- plogis(drop(W    %*% loc_beta))
-    esp <- pmax(pmin(esp, 1 - min_prob), min_prob)
-    
-    efp <- plogis(drop(W_fp %*% loc_beta_fp))
-    efp <- pmax(pmin(efp, 1 - min_prob), min_prob)
-    
-    r_z <- ifelse(z==1, esp/efp, (1-esp)/(1-efp))
-    
-    m1_local <- drop(XY %*% loc_gamma1)
-    m0_local <- drop(XY %*% loc_gamma0)
-    
-    # f1, f2, f3 => differ by target
-    if (target == "ATE") {
-      f1 <- data$s.wt*(1/r_z)*(m1_local - m0_local - loc_v1)
-      f2 <- z*(1/esp)*data$s.wt * (y - m1_local - loc_v2)
-      f3 <- (1 - z)*(1/(1-esp))*data$s.wt * (y - m0_local - loc_v3)
-    } else if (target == "ATT") {
-      f1 <- esp*data$s.wt*(1/r_z)*(m1_local - m0_local - loc_v1)
-      f2 <- z*1*data$s.wt * (y - m1_local - loc_v2)
-      f3 <- (1 - z)*(esp/(1-esp))*data$s.wt * (y - m0_local - loc_v3)
-    } else {
-      # ATO
-      f1 <- esp*(1-esp)*data$s.wt*(1/r_z)*(m1_local - m0_local - loc_v1)
-      f2 <- z*(1-esp)*data$s.wt * (y - m1_local - loc_v2)
-      f3 <- (1 - z)*esp*data$s.wt * (y - m0_local - loc_v3)
+  ## Branch the score function phi according to SW_Design
+  if (SW_Design == "Retrospective") {
+    # Retrospective: use both esp and efp and include the r_z ratio.
+    # Parameter vector: theta = (v1, v2, v3, beta_ps, beta_ps_fp, gamma1, gamma0)
+    phi <- function(theta) {
+      loc_v1         <- theta[1]
+      loc_v2         <- theta[2]
+      loc_v3         <- theta[3]
+      local_beta     <- theta[4:(3 + p)]
+      local_beta_fp  <- theta[(4 + p):(3 + p + p_fp)]
+      loc_gamma1     <- theta[(4 + p + p_fp):(3 + p + p_fp + q)]
+      loc_gamma0     <- theta[(4 + p + p_fp + q):(3 + p + p_fp + 2*q)]
+      
+      esp_local <- plogis(drop(W %*% local_beta))
+      esp_local <- pmax(pmin(esp_local, 1 - min_prob), min_prob)
+      efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+      efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+      
+      r_z <- ifelse(z == 1, esp_local/efp_local, (1 - esp_local)/(1 - efp_local))
+      
+      m1_local <- drop(XY %*% loc_gamma1)
+      m0_local <- drop(XY %*% loc_gamma0)
+      
+      if (target == "ATE") {
+        f1 <- data$s.wt * (1/r_z) * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1/esp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (1/(1 - esp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else if (target == "ATT") {
+        f1 <- esp_local * data$s.wt * (1/r_z) * (m1_local - m0_local - loc_v1)
+        f2 <- z * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (esp_local/(1 - esp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else {  # ATO
+        f1 <- esp_local*(1-esp_local) * data$s.wt * (1/r_z) * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1-esp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * esp_local * data$s.wt * (y - m0_local - loc_v3)
+      }
+      
+      f7 <- weights_ps * W * (z - esp_local)
+      f8 <- W_fp * (z - efp_local)
+      f9 <- XY * ((y - m1_local)*z)
+      f10 <- XY * ((y - m0_local)*(1 - z))
+      return(rbind(f1, f2, f3, t(f7), t(f8), t(f9), t(f10)))
     }
+    theta_hat <- c(v1, v2, v3, beta_ps, beta_ps_fp, gamma1.h, gamma0.h)
     
-    # f7, f8 => outcome-model score
-    f7 <- XY * ((y - m1_local)*z)
-    f8 <- XY * ((y - m0_local)*(1-z))
+  } else if (SW_Design == "Independent") {
+    # Independent: use only the sample-level PS (efp). No r_z is needed.
+    # Parameter vector: theta = (v1, v2, v3, beta_ps_fp, gamma1, gamma0)
+    phi <- function(theta) {
+      loc_v1        <- theta[1]
+      loc_v2        <- theta[2]
+      loc_v3        <- theta[3]
+      local_beta_fp <- theta[4:(3 + p_fp)]
+      efp_local     <- plogis(drop(W_fp %*% local_beta_fp))
+      efp_local     <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+      
+      m1_local <- drop(XY %*% gamma1.h)
+      m0_local <- drop(XY %*% gamma0.h)
+      
+      if (target == "ATE") {
+        f1 <- data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1/efp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (1/(1 - efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else if (target == "ATT") {
+        f1 <- efp_local * data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (efp_local/(1 - efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else {  # ATO
+        f1 <- efp_local*(1-efp_local) * data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1-efp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * efp_local * data$s.wt * (y - m0_local - loc_v3)
+      }
+      f8 <- W_fp * (z - efp_local)
+      f9 <- XY * ((y - m1_local)*z)
+      f10 <- XY * ((y - m0_local)*(1 - z))
+      
+      return(rbind(f1, f2, f3, t(f8), t(f9), t(f10)))
+    }
+    theta_hat <- c(v1, v2, v3, beta_ps_fp, gamma1.h, gamma0.h)
     
-    # f9 => esp PS score
-    f9  <- weights_ps * W    * (z - esp)
-    # f10 => efp PS score
-    f10 <-              W_fp * (z - efp)
-    
-    rbind(
-      f1,
-      f2,
-      f3,
-      t(f7),
-      t(f8),
-      t(f9),
-      t(f10)
-    )
+  } else if (SW_Design == "Prospective") {
+    # Prospective design:
+    # For target ATE: use only sample-level PS (as in Independent)
+    # For target ATT/ATO: use both esp and efp.
+    if (target == "ATE") {
+      phi <- function(theta) {
+        loc_v1 <- theta[1]
+        loc_v2 <- theta[2]
+        loc_v3 <- theta[3]
+        local_beta_fp <- theta[4:(3 + p_fp)]
+        efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+        efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+        
+        m1_local <- drop(XY %*% gamma1.h)
+        m0_local <- drop(XY %*% gamma0.h)
+        
+        f1 <- data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1/efp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (1/(1 - efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+        
+        f8 <- W_fp * (z - efp_local)
+        f9 <- XY * ((y - m1_local)*z)
+        f10 <- XY * ((y - m0_local)*(1 - z))
+        
+        return(rbind(f1, f2, f3, t(f8), t(f9), t(f10)))
+      }
+      theta_hat <- c(v1, v2, v3, beta_ps_fp, gamma1.h, gamma0.h)
+    } else if (target %in% c("ATT", "ATO")) {
+      phi <- function(theta) {
+        loc_v1 <- theta[1]
+        loc_v2 <- theta[2]
+        loc_v3 <- theta[3]
+        local_beta    <- theta[4:(3 + p)]         # for esp (population-level)
+        local_beta_fp <- theta[(4 + p):(3 + p + p_fp)]  # for efp (sample-level)
+        esp_local <- plogis(drop(W %*% local_beta))
+        esp_local <- pmax(pmin(esp_local, 1 - min_prob), min_prob)
+        efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+        efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+        
+        m1_local <- drop(XY %*% gamma1.h)
+        m0_local <- drop(XY %*% gamma0.h)
+        r_z <- ifelse(z == 1, esp_local/efp_local, (1-esp_local)/(1-efp_local))
+        
+        if (target == "ATT") {
+          f1 <- esp_local * data$s.wt * (m1_local - m0_local - loc_v1)
+          f2 <- z * (esp_local/efp_local) * data$s.wt * (y - m1_local - loc_v2)
+          f3 <- (1 - z) * (esp_local/(1-efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+        } else {  # ATO
+          f1 <- esp_local*(1-esp_local) * data$s.wt * (m1_local - m0_local - loc_v1)
+          f2 <- z * esp_local*(1-esp_local)/efp_local * data$s.wt * (y - m1_local - loc_v2)
+          f3 <- (1 - z) * esp_local*(1-esp_local)/(1-efp_local) * data$s.wt * (y - m0_local - loc_v3)
+        }
+        f7 <- weights_ps * W * (z - esp_local)
+        f8 <- W_fp * (z - efp_local)
+        f9 <- XY * ((y - m1_local)*z)
+        f10 <- XY * ((y - m0_local)*(1-z))
+        
+        return(rbind(f1, f2, f3, t(f7), t(f8), t(f9), t(f10)))
+      }
+      theta_hat <- c(v1, v2, v3, beta_ps, beta_ps_fp, gamma1.h, gamma0.h)
+    } else {
+      stop("target not recognized in Prospective design.")
+    }
+  } else {
+    stop("SW_Design must be 'Retrospective', 'Independent', or 'Prospective'.")
   }
   
+  # Compute the empirical Jacobian and then the sandwich variance
   mphi <- function(theta) rowMeans(phi(theta))
-  
-  theta_hat <- c(
-    v1, v2, v3,
-    beta_ps,
-    beta_ps_fp,
-    gamma1.h,
-    gamma0.h
-  )
-  
   Atheta <- numDeriv::jacobian(mphi, theta_hat)
   invAtheta <- tryCatch(
     solve(Atheta),
@@ -790,37 +998,30 @@ CVR_SandwichVariance <- function(
       MASS::ginv(Atheta)
     }
   )
-  
-  phis_hat <- phi(theta_hat)              
-  B_mat    <- tcrossprod(phis_hat) / n    
-  
+  phis_hat <- phi(theta_hat)
+  B_mat <- tcrossprod(phis_hat) / n
   Var_mat <- invAtheta %*% B_mat %*% t(invAtheta) / n
   
-  # 8) Extract var of (v1, v2, v3) => contrast(1,1,-1)
   dims_total <- length(theta_hat)
-  a <- matrix(0, nrow=3, ncol=dims_total)
-  a[1,1] <- 1
-  a[2,2] <- 1
-  a[3,3] <- 1
-  
+  a <- matrix(0, nrow = 3, ncol = dims_total)
+  a[1, 1] <- 1
+  a[2, 2] <- 1
+  a[3, 3] <- 1
   cov_v123 <- a %*% Var_mat %*% t(a)
-  
-  contrast <- matrix(c(1,1,-1), nrow=1)  
-  var_cvr  <- drop(contrast %*% cov_v123 %*% t(contrast))
-  sd_cvr   <- sqrt(var_cvr)
-  
+  contrast <- matrix(c(1, 1, -1), nrow = 1)
+  var_cvr <- drop(contrast %*% cov_v123 %*% t(contrast))
+  sd_cvr <- sqrt(var_cvr)
   coverage_cvr <- as.numeric(
-    (est_cvr - 1.96*sd_cvr < true_value) &&
-      (est_cvr + 1.96*sd_cvr > true_value)
+    (est_cvr - 1.96 * sd_cvr < true_value) &&
+      (est_cvr + 1.96 * sd_cvr > true_value)
   )
   
   list(
-    var_cvr       = var_cvr,
-    sd_cvr        = sd_cvr,
-    coverage_cvr  = coverage_cvr
+    var_cvr = var_cvr,
+    sd_cvr = sd_cvr,
+    coverage_cvr = coverage_cvr
   )
 }
-
 
 
 ##############################################################################
@@ -830,193 +1031,268 @@ CVR_SandwichVariance <- function(
 WET_SandwichVariance <- function(
     data,
     target         = c("ATE", "ATT", "ATO"),
-    
-    # The PSW-based mu1, mu0 estimates => e.g. mu1_pate, mu0_pate
-    mu1_hat,              
-    mu0_hat,
-    
-    # The final WET difference
-    est_wet,         
-    
-    # Optional: True value for coverage
-    true_value,          # e.g. ate_sp, att_sp, or ato_sp
-    
-    # Fitted outcome models for Weighted Regression
-    fit_1_wet,
-    fit_0_wet,
-    
-    # PS arguments
-    beta_ps,
-    beta_ps_fp,
-    covM,
-    covM_fp,
-    weights_ps,
-    min_prob = 0.00,
-    n        = nrow(data)
-){
-  target <- match.arg(target)
+    SW_Design      = c("Retrospective", "Independent", "Prospective"),
+    mu1_hat,               # WET-based mu1 estimate (from WET_Estimator)
+    mu0_hat,               # WET-based mu0 estimate (from WET_Estimator)
+    est_wet,               # WET treatment effect (mu1_hat - mu0_hat)
+    true_value,            # True treatment effect (for coverage)
+    fit_1_wet,             # Outcome model fit for z = 1 (svyglm)
+    fit_0_wet,             # Outcome model fit for z = 0 (svyglm)
+    beta_ps,               # PS coefficients for esp (population-level)
+    beta_ps_fp,            # PS coefficients for efp (sample-level)
+    covM,                  # model.matrix for esp (n x p)
+    covM_fp,               # model.matrix for efp (n x p_fp)
+    weights_ps,            # typically data$s.wt (used in the esp score components)
+    min_prob   = 0.00,     # lower bound to avoid PS=0 or 1
+    n          = nrow(data)
+) {
+  target    <- match.arg(target)
+  SW_Design <- match.arg(SW_Design)
   
   y <- data$y
   z <- data$z
   
-  # 1) Extract outcome-model coefs (gamma1, gamma0)
+  # 1) Extract outcome-model coefficients from the weighted regression fits
   gamma1.h <- as.numeric(coef(fit_1_wet))
   gamma0.h <- as.numeric(coef(fit_0_wet))
   
-  # Build the design matrix used by fit_1_wet
-  XY <- model.matrix(stats::formula(fit_1_wet), data=data)
+  # Outcome design matrix (must match the model used in fit_1_wet)
+  XY <- model.matrix(stats::formula(fit_1_wet), data = data)
   
-  # Dimensions
-  W    <- covM
+  # PS design matrices and dimensions
+  W    <- covM       # for esp (population-level PS)
   p    <- ncol(W)
-  W_fp <- covM_fp
+  W_fp <- covM_fp    # for efp (sample-level PS)
   p_fp <- ncol(W_fp)
   q    <- ncol(XY)
   
-  # 2) Re-extract predicted potential outcomes from WET_Estimator
+  # 2) Get the predicted potential outcomes (as computed in EstSOD)
   m1.h <- data$pred_1_wet
   m0.h <- data$pred_0_wet
   
-  # 3) Compute the augmentation pieces => (v1, v2, v3)
+  # 3) Compute the tilting quantities (using the outcome model weights from EstSOD)
   if (target == "ATE") {
     weighted1h.h <- sum(data$h_ate * m1.h) / sum(data$h_ate)
     weighted1z.h <- sum(z * m1.h * data$ate.wt) / sum(z * data$ate.wt)
-    
     weighted0h.h <- sum(data$h_ate * m0.h) / sum(data$h_ate)
-    weighted0z.h <- sum((1 - z)* m0.h * data$ate.wt) / sum((1 - z)* data$ate.wt)
-    
+    weighted0z.h <- sum((1 - z) * m0.h * data$ate.wt) / sum((1 - z) * data$ate.wt)
   } else if (target == "ATT") {
     weighted1h.h <- sum(data$h_att * m1.h) / sum(data$h_att)
     weighted1z.h <- sum(z * m1.h * data$att.wt) / sum(z * data$att.wt)
-    
     weighted0h.h <- sum(data$h_att * m0.h) / sum(data$h_att)
-    weighted0z.h <- sum((1 - z)* m0.h * data$att.wt) / sum((1 - z)* data$att.wt)
-    
-  } else { # target == "ATO"
+    weighted0z.h <- sum((1 - z) * m0.h * data$att.wt) / sum((1 - z) * data$att.wt)
+  } else {  # target == "ATO"
     weighted1h.h <- sum(data$h_ato * m1.h) / sum(data$h_ato)
     weighted1z.h <- sum(z * m1.h * data$ato.wt) / sum(z * data$ato.wt)
-    
     weighted0h.h <- sum(data$h_ato * m0.h) / sum(data$h_ato)
-    weighted0z.h <- sum((1 - z)* m0.h * data$ato.wt) / sum((1 - z)* data$ato.wt)
+    weighted0z.h <- sum((1 - z) * m0.h * data$ato.wt) / sum((1 - z) * data$ato.wt)
   }
   
   v1 <- weighted1h.h - weighted0h.h
   v2 <- mu1_hat - weighted1z.h
   v3 <- mu0_hat - weighted0z.h
   
-  # 4) Define the phi(...) function for Weighted Regression approach
-  phi <- function(theta){
-    loc_v1      <- theta[1]
-    loc_v2      <- theta[2]
-    loc_v3      <- theta[3]
-    loc_beta    <- theta[4:(3+p)]
-    loc_beta_fp <- theta[(4+p):(3+p+p_fp)]
-    loc_gamma1  <- theta[(4+p+p_fp)          : (3+p+p_fp +    q)]
-    loc_gamma0  <- theta[(4+p+p_fp +    q)   : (3+p+p_fp + 2*q)]
+  ## Branch the score function phi by SW_Design:
+  if (SW_Design == "Retrospective") {
+    # Retrospective: use both esp and efp and include r_z in the outcome score part.
+    # Parameter vector: theta = (v1, v2, v3, beta_ps, beta_ps_fp, gamma1, gamma0)
+    phi <- function(theta) {
+      loc_v1         <- theta[1]
+      loc_v2         <- theta[2]
+      loc_v3         <- theta[3]
+      local_beta     <- theta[4:(3 + p)]
+      local_beta_fp  <- theta[(4 + p):(3 + p + p_fp)]
+      loc_gamma1     <- theta[(4 + p + p_fp):(3 + p + p_fp + q)]
+      loc_gamma0     <- theta[(4 + p + p_fp + q):(3 + p + p_fp + 2*q)]
+      
+      esp_local <- plogis(drop(W %*% local_beta))
+      esp_local <- pmax(pmin(esp_local, 1 - min_prob), min_prob)
+      efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+      efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+      r_z <- ifelse(z == 1, esp_local/efp_local, (1 - esp_local)/(1 - efp_local))
+      
+      m1_local <- drop(XY %*% loc_gamma1)
+      m0_local <- drop(XY %*% loc_gamma0)
+      
+      if (target == "ATE") {
+        f1 <- data$s.wt * (1/r_z) * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1/esp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (1/(1 - esp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else if (target == "ATT") {
+        f1 <- esp_local * data$s.wt * (1/r_z) * (m1_local - m0_local - loc_v1)
+        f2 <- z * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (esp_local/(1 - esp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else {  # ATO
+        f1 <- esp_local*(1-esp_local) * data$s.wt * (1/r_z) * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1-esp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * esp_local * data$s.wt * (y - m0_local - loc_v3)
+      }
+      # Outcome model score parts: use the appropriate outcome weight
+      f7  <- weights_ps * W * (z - esp_local)
+      f8 <- W_fp * (z - efp_local)
+      if (target == "ATE") {
+        f9 <- XY * ((y - m1_local)*z) * data$ate.wt
+        f10 <- XY * ((y - m0_local)*(1-z)) * data$ate.wt
+      } else if (target == "ATT") {
+        f9 <- XY * ((y - m1_local)*z) * data$att.wt
+        f10 <- XY * ((y - m0_local)*(1-z)) * data$att.wt
+      } else {  # ATO
+        f9 <- XY * ((y - m1_local)*z) * data$ato.wt
+        f10 <- XY * ((y - m0_local)*(1-z)) * data$ato.wt
+      }
+      
+      return(rbind(f1, f2, f3, t(f7), t(f8), t(f9), t(f10)))
+    }
+    theta_hat <- c(v1, v2, v3, beta_ps, beta_ps_fp, gamma1.h, gamma0.h)
     
-    esp <- plogis(drop(W    %*% loc_beta))
-    esp <- pmax(pmin(esp, 1 - min_prob), min_prob)
+  } else if (SW_Design == "Independent") {
+    # Independent: use only the sample-level PS (efp) and no r_z is needed.
+    # Parameter vector: theta = (v1, v2, v3, beta_ps_fp, gamma1, gamma0)
+    phi <- function(theta) {
+      loc_v1        <- theta[1]
+      loc_v2        <- theta[2]
+      loc_v3        <- theta[3]
+      local_beta_fp <- theta[4:(3 + p_fp)]
+      efp_local     <- plogis(drop(W_fp %*% local_beta_fp))
+      efp_local     <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+      
+      m1_local <- drop(XY %*% gamma1.h)
+      m0_local <- drop(XY %*% gamma0.h)
+      
+      if (target == "ATE") {
+        f1 <- data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1/efp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (1/(1 - efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else if (target == "ATT") {
+        f1 <- efp_local * data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (efp_local/(1 - efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+      } else {  # ATO
+        f1 <- efp_local*(1-efp_local) * data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1-efp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * efp_local * data$s.wt * (y - m0_local - loc_v3)
+      }
+      f8 <- W_fp * (z - efp_local)
+      if (target == "ATE") {
+        f9 <- XY * ((y - m1_local)*z) * data$ate.wt
+        f10 <- XY * ((y - m0_local)*(1-z)) * data$ate.wt
+      } else if (target == "ATT") {
+        f9 <- XY * ((y - m1_local)*z) * data$att.wt
+        f10 <- XY * ((y - m0_local)*(1-z)) * data$att.wt
+      } else {
+        f9 <- XY * ((y - m1_local)*z) * data$ato.wt
+        f10 <- XY * ((y - m0_local)*(1-z)) * data$ato.wt
+      }
+      
+      return(rbind(f1, f2, f3, t(f8), t(f9), t(f10)))
+    }
+    theta_hat <- c(v1, v2, v3, beta_ps_fp, gamma1.h, gamma0.h)
     
-    efp <- plogis(drop(W_fp %*% loc_beta_fp))
-    efp <- pmax(pmin(efp, 1 - min_prob), min_prob)
-    
-    r_z <- ifelse(z==1, esp/efp, (1-esp)/(1-efp))
-    
-    m1_local <- drop(XY %*% loc_gamma1)
-    m0_local <- drop(XY %*% loc_gamma0)
-
+  } else if (SW_Design == "Prospective") {
+    # Prospective design:
+    # For target ATE: use only sample-level PS (as in Independent)
+    # For target ATT/ATO: use both esp and efp and compute the r_z ratio.
     if (target == "ATE") {
-      f1 <- data$s.wt*(1/r_z)*(m1_local - m0_local - loc_v1)
-      f2 <- z*(1/esp)*data$s.wt * (y - m1_local - loc_v2)
-      f3 <- (1 - z)*(1/(1-esp))*data$s.wt * (y - m0_local - loc_v3)
-      
-    } else if (target == "ATT") {
-      f1 <- esp*data$s.wt*(1/r_z)*(m1_local - m0_local - loc_v1)
-      f2 <- z*(1)*data$s.wt * (y - m1_local - loc_v2)
-      f3 <- (1 - z)*(esp/(1-esp))*data$s.wt * (y - m0_local - loc_v3)
-      
+      phi <- function(theta) {
+        loc_v1 <- theta[1]
+        loc_v2 <- theta[2]
+        loc_v3 <- theta[3]
+        local_beta_fp <- theta[4:(3 + p_fp)]
+        efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+        efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+        
+        m1_local <- drop(XY %*% gamma1.h)
+        m0_local <- drop(XY %*% gamma0.h)
+        
+        f1 <- data$s.wt * (m1_local - m0_local - loc_v1)
+        f2 <- z * (1/efp_local) * data$s.wt * (y - m1_local - loc_v2)
+        f3 <- (1 - z) * (1/(1 - efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+        
+        f8 <- W_fp * (z - efp_local)
+        f9 <- XY * ((y - m1_local)*z) * data$ate.wt
+        f10 <- XY * ((y - m0_local)*(1-z)) * data$ate.wt
+        
+        return(rbind(f1, f2, f3, t(f8), t(f9), t(f10)))
+      }
+      theta_hat <- c(v1, v2, v3, beta_ps_fp, gamma1.h, gamma0.h)
+    } else if (target %in% c("ATT", "ATO")) {
+      phi <- function(theta) {
+        loc_v1 <- theta[1]
+        loc_v2 <- theta[2]
+        loc_v3 <- theta[3]
+        local_beta    <- theta[4:(3 + p)]         # for esp (population-level)
+        local_beta_fp <- theta[(4+p):(3+p+p_fp)]    # for efp (sample-level)
+        esp_local <- plogis(drop(W %*% local_beta))
+        esp_local <- pmax(pmin(esp_local, 1 - min_prob), min_prob)
+        efp_local <- plogis(drop(W_fp %*% local_beta_fp))
+        efp_local <- pmax(pmin(efp_local, 1 - min_prob), min_prob)
+        r_z <- ifelse(z == 1, esp_local/efp_local, (1-esp_local)/(1-efp_local))
+        
+        m1_local <- drop(XY %*% gamma1.h)
+        m0_local <- drop(XY %*% gamma0.h)
+        
+        if (target == "ATT") {
+          f1 <- esp_local * data$s.wt * (m1_local - m0_local - loc_v1)
+          f2 <- z * (esp_local/efp_local) * data$s.wt * (y - m1_local - loc_v2)
+          f3 <- (1 - z) * (esp_local/(1-efp_local)) * data$s.wt * (y - m0_local - loc_v3)
+        } else {  # ATO
+          f1 <- esp_local*(1-esp_local) * data$s.wt * (m1_local - m0_local - loc_v1)
+          f2 <- z * esp_local*(1-esp_local)/efp_local * data$s.wt * (y - m1_local - loc_v2)
+          f3 <- (1 - z) * esp_local*(1-esp_local)/(1-efp_local) * data$s.wt * (y - m0_local - loc_v3)
+        }
+        
+        f7 <- weights_ps * W * (z - esp_local)
+        f8 <- W_fp * (z - efp_local)
+        if (target == "ATT") {
+          f9 <- XY * ((y - m1_local)*z) * data$att.wt
+          f10 <- XY * ((y - m0_local)*(1-z)) * data$att.wt
+        } else {
+          f9 <- XY * ((y - m1_local)*z) * data$ato.wt
+          f10 <- XY * ((y - m0_local)*(1-z)) * data$ato.wt
+        }
+        
+        return(rbind(f1, f2, f3, t(f7), t(f8), t(f9), t(f10)))
+      }
+      theta_hat <- c(v1, v2, v3, beta_ps, beta_ps_fp, gamma1.h, gamma0.h)
     } else {
-      f1 <- esp*(1-esp)*data$s.wt*(1/r_z)*(m1_local - m0_local - loc_v1)
-      f2 <- z*(1-esp)*data$s.wt * (y - m1_local - loc_v2)
-      f3 <- (1 - z)*esp*data$s.wt * (y - m0_local - loc_v3)
+      stop("target not recognized in Prospective design.")
     }
-    
-    # f7, f8 => from outcome model wrt gamma1, gamma0
-    if (target == "ATE") {
-      f7 <- XY * ((y - m1_local)*z)        * data$ate.wt
-      f8 <- XY * ((y - m0_local)*(1 - z))  * data$ate.wt
-    } else if (target == "ATT") {
-      f7 <- XY * ((y - m1_local)*z)        * data$att.wt
-      f8 <- XY * ((y - m0_local)*(1 - z))  * data$att.wt
-    } else { # ATO
-      f7 <- XY * ((y - m1_local)*z)        * data$ato.wt
-      f8 <- XY * ((y - m0_local)*(1 - z))  * data$ato.wt
-    }
-
-    f9  <- weights_ps * W    * (z - esp)
-    f10 <- W_fp * (z - efp)
-    
-    rbind(
-      f1,
-      f2,
-      f3,
-      t(f7),
-      t(f8),
-      t(f9),
-      t(f10)
-    )
+  } else {
+    stop("SW_Design must be 'Retrospective', 'Independent', or 'Prospective'.")
   }
   
   mphi <- function(theta) rowMeans(phi(theta))
-
-  theta_hat <- c(
-    v1, v2, v3,
-    beta_ps,
-    beta_ps_fp,
-    gamma1.h,
-    gamma0.h
-  )
-  
   Atheta <- numDeriv::jacobian(mphi, theta_hat)
   invAtheta <- tryCatch(
     solve(Atheta),
-    error=function(e) {
+    error = function(e) {
       message("WET_SandwichVariance: Atheta singular => using MASS::ginv")
       MASS::ginv(Atheta)
     }
   )
-  
-  phis_hat <- phi(theta_hat)            
-  B_mat    <- tcrossprod(phis_hat) / n  
-  
+  phis_hat <- phi(theta_hat)
+  B_mat <- tcrossprod(phis_hat) / n
   Var_mat <- invAtheta %*% B_mat %*% t(invAtheta) / n
   
   dims_total <- length(theta_hat)
-  a <- matrix(0, nrow=3, ncol=dims_total)
-  a[1,1] <- 1 # picks v1
-  a[2,2] <- 1 # picks v2
-  a[3,3] <- 1 # picks v3
-  
+  a <- matrix(0, nrow = 3, ncol = dims_total)
+  a[1, 1] <- 1; a[2, 2] <- 1; a[3, 3] <- 1
   cov_v123 <- a %*% Var_mat %*% t(a)
-  
-  # The estimand is v1 + v2 - v3 = (1,1,-1)
-  contrast <- matrix(c(1,1,-1), nrow=1)
-  var_wet  <- drop(contrast %*% cov_v123 %*% t(contrast))
-  sd_wet   <- sqrt(var_wet)
+  contrast <- matrix(c(1, 1, -1), nrow = 1)
+  var_wet <- drop(contrast %*% cov_v123 %*% t(contrast))
+  sd_wet <- sqrt(var_wet)
   
   coverage_wet <- as.numeric(
-    (est_wet - 1.96*sd_wet < true_value) &&
-      (est_wet + 1.96*sd_wet > true_value)
+    (est_wet - 1.96 * sd_wet < true_value) &&
+      (est_wet + 1.96 * sd_wet > true_value)
   )
   
   list(
-    var_wet       = var_wet,
-    sd_wet        = sd_wet,
-    coverage_wet  = coverage_wet
+    var_wet = var_wet,
+    sd_wet = sd_wet,
+    coverage_wet = coverage_wet
   )
 }
-
-
 
 
 

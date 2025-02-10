@@ -3,7 +3,7 @@
 # treatment="z"
 # outcome="y"
 # method_PS="W"
-# method_OM="W"
+# SW_Design = "Independent"
 # 
 # covariatesPS = c("x1","x2","x3","x4","x5","x6","x1:x2")
 # covariatesOM = c("x1","x2","x3","x4","x5","x6","x1:x2")
@@ -13,12 +13,12 @@
 # covariatesOM=covariatesOM
 # covariatesSMD=covariatesSMD
 # 
-# cluster_name = "Cluster"  
+# cluster_name = "Cluster"
 # strata_name  = "Strata"
 # 
 # min_prob = min_prob
 # 
-
+# 
 
 
 ##############################################################################
@@ -31,7 +31,7 @@ EstSOD <- function(
     treatment    = "z",
     outcome      = "y",
     method_PS,                # e.g. "U","W","C","CW"
-    method_OM,                # e.g. "U","W"
+    SW_Design, # e.g. "Retrospective", "Independent", "Prospective"
     covariatesPS,
     covariatesOM,
     covariatesSMD,
@@ -58,7 +58,7 @@ EstSOD <- function(
   }
   
   # For naming
-  name <- paste0(method_PS, ".PS|", method_OM, ".OM")
+  name <- paste0(method_PS, ".PS|")
   
   ###################################################################
   # 2) Fit the logistic PS model 
@@ -140,16 +140,12 @@ EstSOD <- function(
   data$z <- data[[treatment]]
   r_z <- ifelse(data$z==1, esp/efp, (1-esp)/(1-efp))
   
-  if (method_OM == "U") {
-    data$ate.wt <- ifelse(data$z==1, 1/esp, 1/(1-esp))
-    data$att.wt <- ifelse(data$z==1, 1,     esp/(1-esp))
-    data$ato.wt <- ifelse(data$z==1, 1-esp, esp)
-    
-    data$h_ate <- 1
-    data$h_att <- esp
-    data$h_ato <- esp*(1-esp)
-    
-  } else if (method_OM == "W") { # "W" is the right choice corresponding to our paper
+  data$esp <- esp
+  data$efp <- efp
+  data$r_z <- r_z
+  
+  
+  if (SW_Design == "Retrospective") { # Survey weight: P(S=1 | Z, X)
     
     data$ate.wt <- ifelse(data$z==1, 1/esp, 1/(1-esp)) * data$s.wt
     data$att.wt <- ifelse(data$z==1, 1, esp/(1-esp))   * data$s.wt
@@ -159,9 +155,30 @@ EstSOD <- function(
     data$h_att <- esp*data$s.wt * (1/r_z)
     data$h_ato <- esp*(1-esp)*data$s.wt * (1/r_z)
     
+  } else if (SW_Design == "Independent") { # Survey weight: P(S=1 | X), Z and S are independent, esp = efp
+    
+    data$ate.wt <- ifelse(data$z==1, 1/efp, 1/(1-efp)) * data$s.wt
+    data$att.wt <- ifelse(data$z==1, 1, efp/(1-efp))   * data$s.wt
+    data$ato.wt <- ifelse(data$z==1, 1-efp, efp)       * data$s.wt
+    
+    data$h_ate <- data$s.wt 
+    data$h_att <- efp*data$s.wt
+    data$h_ato <- efp*(1-efp)*data$s.wt
+    
+  } else if (SW_Design == "Prospective") { # Survey weight: P(S=1 | X), Z still depends on S.
+    
+    data$ate.wt <- ifelse(data$z==1, 1/efp, 1/(1-efp)) * data$s.wt
+    data$att.wt <- ifelse(data$z==1, esp/efp, esp/(1-efp))   * data$s.wt
+    data$ato.wt <- ifelse(data$z==1, esp*(1-esp)/efp, esp*(1-esp)/(1-efp))   * data$s.wt
+    
+    data$h_ate <- data$s.wt 
+    data$h_att <- esp*data$s.wt
+    data$h_ato <- esp*(1-esp)*data$s.wt
+    
   } else {
-    stop("method_OM must be 'U' or 'W'.")
+    stop("SW_Design must be 'Retrospective', 'Independent' or 'Prospective'.")
   }
+  
   
   ###################################################################
   # 4) Now call the shared estimator/variance functions
@@ -179,6 +196,7 @@ EstSOD <- function(
   sv_ate <- PSW_SandwichVariance(
     data     = data,
     target     = "ATE",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_pate,
     mu0_hat    = mu0_pate,
     est_psw    = pate,
@@ -206,6 +224,7 @@ EstSOD <- function(
   sv_att <- PSW_SandwichVariance(
     data     = data,
     target     = "ATT",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_patt,
     mu0_hat    = mu0_patt,
     est_psw    = patt,
@@ -233,6 +252,7 @@ EstSOD <- function(
   sv_ato <- PSW_SandwichVariance(
     data     = data,
     target     = "ATO",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_pato,
     mu0_hat    = mu0_pato,
     est_psw    = pato,
@@ -272,6 +292,7 @@ EstSOD <- function(
   sv_ate_mom <- MOM_SandwichVariance(
     data     = data,
     target     = "ATE",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_pate, 
     mu0_hat    = mu0_pate,
     est_mom    = pate_mom,
@@ -289,7 +310,7 @@ EstSOD <- function(
   ate_san_var_mom      <- sv_ate_mom$var_mom
   ate_san_sd_mom       <- sv_ate_mom$sd_mom
   ate_san_coverage_mom <- sv_ate_mom$coverage_mom
-  
+
   # Do similarly for ATT (MOM)
   res_att_mom <- MOM_Estimator(data, target="ATT",
                                cluster_formula=cluster_formula,
@@ -305,6 +326,7 @@ EstSOD <- function(
   sv_att_mom <- MOM_SandwichVariance(
     data     = data,
     target     = "ATT",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_patt,
     mu0_hat    = mu0_patt,
     est_mom    = patt_mom,
@@ -338,6 +360,7 @@ EstSOD <- function(
   sv_ato_mom <- MOM_SandwichVariance(
     data     = data,
     target     = "ATO",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_pato,  
     mu0_hat    = mu0_pato,
     est_mom    = pato_mom,
@@ -377,6 +400,7 @@ EstSOD <- function(
   sv_ate_cvr <- CVR_SandwichVariance(
     data     = data,
     target     = "ATE",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_pate, 
     mu0_hat    = mu0_pate,
     est_cvr    = pate_cvr,
@@ -412,6 +436,7 @@ EstSOD <- function(
   sv_att_cvr <- CVR_SandwichVariance(
     data     = data,
     target     = "ATT",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_patt,  
     mu0_hat    = mu0_patt,
     est_cvr    = patt_cvr,
@@ -447,6 +472,7 @@ EstSOD <- function(
   sv_ato_cvr <- CVR_SandwichVariance(
     data     = data,
     target     = "ATO",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_pato,  
     mu0_hat    = mu0_pato,
     est_cvr    = pato_cvr,
@@ -487,6 +513,7 @@ EstSOD <- function(
   sv_ate_wet <- WET_SandwichVariance(
     data     = data,
     target     = "ATE",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_pate,  
     mu0_hat    = mu0_pate,
     est_wet    = pate_wet,
@@ -522,6 +549,7 @@ EstSOD <- function(
   sv_att_wet <- WET_SandwichVariance(
     data     = data,
     target     = "ATT",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_patt,
     mu0_hat    = mu0_patt,
     est_wet    = patt_wet,
@@ -557,6 +585,7 @@ EstSOD <- function(
   sv_ato_wet <- WET_SandwichVariance(
     data     = data,
     target     = "ATO",
+    SW_Design  = SW_Design,
     mu1_hat    = mu1_pato,
     mu0_hat    = mu0_pato,
     est_wet    = pato_wet,
